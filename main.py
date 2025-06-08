@@ -1,4 +1,5 @@
 import time
+import argparse
 from youtube_transcript_api._api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 import re
@@ -12,7 +13,7 @@ SUMMARIZATION_PROMPT = """**Persona:** You are an Expert Video Content Analyst a
 
 **Output Requirements:**
 
-1.  **Language:** Strictly Original Language of the video. (applies to all summaries).
+1.  **Language:** Strictly {summary_language}. (applies to all summaries).
 2.  **Tone:** Professional, objective, and informative (applies to all summaries).
 3.  **Multi-Part Summary Output:** The entire output should consist of four distinct summaries, separated by "---".
 
@@ -61,16 +62,18 @@ SUMMARIZATION_PROMPT = """**Persona:** You are an Expert Video Content Analyst a
 **TimeStamped Video Transcript:**
 {video_transcript}
 """
-# youtube_video_url = "https://www.youtube.com/watch?v=VEByHg_aFPI"
-youtube_video_url = "https://www.youtube.com/watch?v=FCE_JyeJzJg&list=PLFr7f4WLNwrZzhz-YDjha6j3Z9ymjo7rD&index=3"
+# youtube_video_url = "https://www.youtube.com/watch?v=FCE_JyeJzJg&list=PLFr7f4WLNwrZzhz-YDjha6j3Z9ymjo7rD&index=3"
 
 
-def extract_video_id(url: str) -> str | None:
+def extract_video_id(url: str) -> str:
     """
     Extracts the video ID from a YouTube URL.
+    Raises a ValueError if unable to extract the video ID.
     """
     match = re.search(r"v=([\w-]+)", url)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+    raise ValueError("[Error] Could not extract video ID from URL.")
 
 
 def convert_seconds_to_timestamp(seconds: float) -> str:
@@ -83,15 +86,12 @@ def convert_seconds_to_timestamp(seconds: float) -> str:
     return f"{hours}:{minutes}:{seconds}"
 
 
-def get_video_transcript() -> str:
+def get_video_transcript(video_id: str) -> str:
     """
     Retrieves the transcript for the YouTube video specified by youtube_video_url.
     Returns the transcript as a single string, or raises an error message if unable to do so.
     Implements an improved retry strategy with exponential backoff and logs all attempts.
     """
-    video_id = extract_video_id(youtube_video_url)
-    if not video_id:
-        return "[Error] Could not extract video ID from URL."
     transcript_text = ""
     languages = ("en", "fa")
     max_retries = 7
@@ -117,7 +117,9 @@ def get_video_transcript() -> str:
                 logger.error("[Error] Transcripts are disabled for this video.")
                 break
             except NoTranscriptFound:
-                logger.error("[Error] No transcript found for this video.")
+                logger.error(
+                    f"[Error] No transcript found for this video in the {language} language."
+                )
                 break
             except Exception as e:
                 logger.error(f"[Error] Attempt {n_try} failed: {e}")
@@ -131,14 +133,20 @@ def get_video_transcript() -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Summarize a YouTube video by URL.")
+    parser.add_argument("url", help="YouTube video URL")
+    args = parser.parse_args()
+    youtube_video_url = args.url
+
     try:
-        video_transcript = get_video_transcript()
+        video_id = extract_video_id(youtube_video_url)
+        video_transcript = get_video_transcript(video_id)
     except ValueError as e:
         logger.error(f"[Error] {e}")
         return
 
     final_prompt = SUMMARIZATION_PROMPT.format(
-        youtube_video_url=youtube_video_url, video_transcript=video_transcript
+        youtube_video_url=f"https://www.youtube.com/watch?v={video_id}", video_transcript=video_transcript, summary_language="Original Language of the video"
     )
     print(final_prompt)
 
