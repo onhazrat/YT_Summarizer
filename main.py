@@ -5,7 +5,7 @@ from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFoun
 import re
 from loguru import logger
 import subprocess
-import sqlite3
+from sqlmodel import SQLModel, Field, Session, select, create_engine
 import datetime
 import os
 
@@ -138,73 +138,63 @@ def get_video_transcript(video_id: str) -> tuple[str, str]:
     raise ValueError("[Error] Could not retrieve transcript after multiple attempts.")
 
 
-def init_db(db_path=DB_PATH):
+class Transcript(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    video_id: str
+    url: str
+    transcript: str
+    transcription_language: str
+    created_at: str
+
+def get_engine():
+    return create_engine(f"sqlite:///{DB_PATH}", echo=False)
+
+def init_db():
     """
     Initializes the SQLite database and creates the transcripts table if it doesn't exist.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS transcripts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            video_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            transcript TEXT NOT NULL,
-            transcription_language TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
+    engine = get_engine()
+    SQLModel.metadata.create_all(engine)
 
 def store_transcript(
     video_id: str,
     url: str,
     transcript: str,
     transcription_language: str,
-    db_path=DB_PATH,
 ):
     """
-    Stores the transcript in the SQLite database.
+    Stores the transcript in the SQLite database using SQLModel ORM.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO transcripts (video_id, url, transcript, transcription_language, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            video_id,
-            url,
-            transcript,
-            transcription_language,
-            datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        ),
+    engine = get_engine()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    transcript_obj = Transcript(
+        video_id=video_id,
+        url=url,
+        transcript=transcript,
+        transcription_language=transcription_language,
+        created_at=now,
     )
-    conn.commit()
-    conn.close()
+    with Session(engine) as session:
+        session.add(transcript_obj)
+        session.commit()
 
-
-def get_transcript_from_db(video_id: str, db_path=DB_PATH):
+def get_transcript_from_db(video_id: str):
     """
     Retrieves the transcript and transcription_language from the DB for the given video_id.
     Returns (transcript, transcription_language) or (None, None) if not found.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT transcript, transcription_language FROM transcripts WHERE video_id = ? ORDER BY created_at DESC LIMIT 1",
-        (video_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return row[0], row[1]
-    return None, None
+    engine = get_engine()
+    with Session(engine) as session:
+        statement = (
+            select(Transcript)
+            .where(Transcript.video_id == video_id)
+            .order_by(Transcript.created_at.desc())
+            .limit(1)
+        )
+        result = session.exec(statement).first()
+        if result:
+            return result.transcript, result.transcription_language
+        return None, None
 
 
 def main() -> None:
@@ -245,7 +235,10 @@ def main() -> None:
         video_transcript=video_transcript,
         summary_language="Original Language of the video",
     )
-    print(final_prompt)
+    if len(final_prompt) > 2000:
+        logger.debug(final_prompt[:1000] + "\n...\n" + final_prompt[-1000:])
+    else:
+        logger.debug(final_prompt)
     try:
         subprocess.run("pbcopy", text=True, input=final_prompt, check=True)
         logger.info("Final prompt copied to clipboard.")
