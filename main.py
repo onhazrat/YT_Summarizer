@@ -4,6 +4,7 @@ from youtube_transcript_api._api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 import re
 from loguru import logger
+import subprocess
 
 SUMMARIZATION_PROMPT = """**Persona:** You are an Expert Video Content Analyst and Summarizer. Your expertise lies in distilling complex video information into clear, concise, and actionable summaries.
 
@@ -149,6 +150,11 @@ def main() -> None:
         youtube_video_url=f"https://www.youtube.com/watch?v={video_id}", video_transcript=video_transcript, summary_language="Original Language of the video"
     )
     print(final_prompt)
+    try:
+        subprocess.run("pbcopy", text=True, input=final_prompt, check=True)
+        logger.info("Final prompt copied to clipboard.")
+    except Exception as e:
+        logger.error(f"Failed to copy to clipboard: {e}")
     transcribe_word_count = len(video_transcript.split())
     logger.debug(f"Transcribe Word Count: {transcribe_word_count:,}")
     final_prompt_word_count = len(final_prompt.split())
