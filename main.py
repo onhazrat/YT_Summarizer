@@ -5,7 +5,12 @@ from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFoun
 import re
 from loguru import logger
 import subprocess
+import sqlite3
+import datetime
+import os
 
+PROJECT_BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(PROJECT_BASE_PATH, "data/transcripts.db")
 SUMMARIZATION_PROMPT = """**Persona:** You are an Expert Video Content Analyst and Summarizer. Your expertise lies in distilling complex video information into clear, concise, and actionable summaries.
 
 **Primary Goal:** To create a comprehensive yet digestible summary of the provided YouTube video. This summary must enable a user to thoroughly understand the video's core message, key announcements, significant data points, strategic implications, and any calls to action, effectively replacing the need for them to watch the video itself.
@@ -87,10 +92,10 @@ def convert_seconds_to_timestamp(seconds: float) -> str:
     return f"{hours}:{minutes}:{seconds}"
 
 
-def get_video_transcript(video_id: str) -> str:
+def get_video_transcript(video_id: str) -> tuple[str, str]:
     """
     Retrieves the transcript for the YouTube video specified by youtube_video_url.
-    Returns the transcript as a single string, or raises an error message if unable to do so.
+    Returns a tuple (transcript, transcription_language), or raises an error message if unable to do so.
     Implements an improved retry strategy with exponential backoff and logs all attempts.
     """
     transcript_text = ""
@@ -113,7 +118,7 @@ def get_video_transcript(video_id: str) -> str:
                         for entry in fetched_transcript
                     ]
                 )
-                return transcript_text
+                return transcript_text, language
             except TranscriptsDisabled:
                 logger.error("[Error] Transcripts are disabled for this video.")
                 break
@@ -133,21 +138,112 @@ def get_video_transcript(video_id: str) -> str:
     raise ValueError("[Error] Could not retrieve transcript after multiple attempts.")
 
 
+def init_db(db_path=DB_PATH):
+    """
+    Initializes the SQLite database and creates the transcripts table if it doesn't exist.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transcripts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            transcript TEXT NOT NULL,
+            transcription_language TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def store_transcript(
+    video_id: str,
+    url: str,
+    transcript: str,
+    transcription_language: str,
+    db_path=DB_PATH,
+):
+    """
+    Stores the transcript in the SQLite database.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO transcripts (video_id, url, transcript, transcription_language, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            video_id,
+            url,
+            transcript,
+            transcription_language,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_transcript_from_db(video_id: str, db_path=DB_PATH):
+    """
+    Retrieves the transcript and transcription_language from the DB for the given video_id.
+    Returns (transcript, transcription_language) or (None, None) if not found.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT transcript, transcription_language FROM transcripts WHERE video_id = ? ORDER BY created_at DESC LIMIT 1",
+        (video_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row[0], row[1]
+    return None, None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize a YouTube video by URL.")
     parser.add_argument("url", help="YouTube video URL")
+    parser.add_argument("--force-fetch", action="store_true", help="Bypass DB and fetch transcript from YouTube")
     args = parser.parse_args()
     youtube_video_url = args.url
+    force_fetch = args.force_fetch
+
+    init_db()  # Ensure DB and table exist
 
     try:
         video_id = extract_video_id(youtube_video_url)
-        video_transcript = get_video_transcript(video_id)
+        video_transcript = None
+        transcription_language = None
+
+        if not force_fetch:
+            video_transcript, transcription_language = get_transcript_from_db(video_id)
+            if video_transcript:
+                logger.info("Transcript loaded from DB.")
+        if not video_transcript:
+            video_transcript, transcription_language = get_video_transcript(video_id)
+            try:
+                store_transcript(
+                    video_id, youtube_video_url, video_transcript, transcription_language
+                )
+                logger.info("Transcript stored in DB.")
+            except Exception as e:
+                logger.error(f"Failed to store transcript in DB: {e}")
+
     except ValueError as e:
         logger.error(f"[Error] {e}")
         return
 
     final_prompt = SUMMARIZATION_PROMPT.format(
-        youtube_video_url=f"https://www.youtube.com/watch?v={video_id}", video_transcript=video_transcript, summary_language="Original Language of the video"
+        youtube_video_url=f"https://www.youtube.com/watch?v={video_id}",
+        video_transcript=video_transcript,
+        summary_language="Original Language of the video",
     )
     print(final_prompt)
     try:
@@ -159,7 +255,6 @@ def main() -> None:
     logger.debug(f"Transcribe Word Count: {transcribe_word_count:,}")
     final_prompt_word_count = len(final_prompt.split())
     logger.debug(f"Final Prompt Word Count: {final_prompt_word_count:,}")
-
 
 if __name__ == "__main__":
     main()
