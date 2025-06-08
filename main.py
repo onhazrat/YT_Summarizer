@@ -149,6 +149,10 @@ def main() -> None:
         youtube_video_url=f"https://www.youtube.com/watch?v={video_id}", video_transcript=video_transcript, summary_language="Original Language of the video"
     )
     print(final_prompt)
+    transcribe_word_count = len(video_transcript.split())
+    logger.debug(f"Transcribe Word Count: {transcribe_word_count:,}")
+    final_prompt_word_count = len(final_prompt.split())
+    logger.debug(f"Final Prompt Word Count: {final_prompt_word_count:,}")
 
 
 if __name__ == "__main__":
