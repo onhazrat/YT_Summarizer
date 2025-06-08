@@ -1,0 +1,10 @@
+[project]
+name = "yt-summarizer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "loguru>=0.7.3",
+    "youtube-transcript-api>=1.0.3",
+]
