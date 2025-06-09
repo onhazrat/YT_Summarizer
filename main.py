@@ -90,16 +90,17 @@ def convert_seconds_to_timestamp(seconds: float) -> str:
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     seconds = int(seconds % 60)
-    
+
     # Use the :02 format specifier to pad each part with a leading zero if needed
     return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 
-def get_video_transcript(video_id: str) -> tuple[str, str]:
+def get_video_transcript(video_id: str, proxy: str | None = None) -> tuple[str, str]:
     """
     Retrieves the transcript for the YouTube video specified by youtube_video_url.
     Returns a tuple (transcript, transcription_language), or raises an error message if unable to do so.
     Implements an improved retry strategy with exponential backoff and logs all attempts.
+    Optionally uses a proxy for network requests.
     """
     transcript_text = ""
     languages = ("en", "fa")
@@ -110,7 +111,11 @@ def get_video_transcript(video_id: str) -> tuple[str, str]:
         for n_try in range(1, max_retries + 1):
             try:
                 logger.debug(f"Attempt {n_try} for language '{language}'")
-                transcript_languages = YouTubeTranscriptApi.list_transcripts(video_id)
+                # Use proxy if provided, otherwise default
+                transcript_languages = YouTubeTranscriptApi.list_transcripts(
+                    video_id,
+                    proxies={"http": proxy, "https": proxy} if proxy else None,
+                )
                 logger.debug(transcript_languages)
                 transcript = transcript_languages.find_transcript([language])
                 logger.debug(f"Found transcript: {transcript}")
@@ -149,8 +154,10 @@ class Transcript(SQLModel, table=True):
     transcription_language: str
     created_at: str
 
+
 def get_engine():
     return create_engine(f"sqlite:///{DB_PATH}", echo=False)
+
 
 def init_db():
     """
@@ -158,6 +165,7 @@ def init_db():
     """
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
+
 
 def store_transcript(
     video_id: str,
@@ -181,6 +189,7 @@ def store_transcript(
         session.add(transcript_obj)
         session.commit()
 
+
 def get_transcript_from_db(video_id: str):
     """
     Retrieves the transcript and transcription_language from the DB for the given video_id.
@@ -203,10 +212,21 @@ def get_transcript_from_db(video_id: str):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize a YouTube video by URL.")
     parser.add_argument("url", help="YouTube video URL")
-    parser.add_argument("--force-fetch", action="store_true", help="Bypass DB and fetch transcript from YouTube")
+    parser.add_argument(
+        "--force-fetch",
+        action="store_true",
+        help="Bypass DB and fetch transcript from YouTube",
+    )
+    parser.add_argument(
+        "--proxy",
+        type=str,
+        default=None,
+        help="Proxy URL (e.g., http://127.0.0.1:8086 or socks5h://127.0.0.1:2080)",
+    )
     args = parser.parse_args()
     youtube_video_url = args.url
     force_fetch = args.force_fetch
+    proxy = args.proxy
 
     init_db()  # Ensure DB and table exist
 
@@ -220,10 +240,15 @@ def main() -> None:
             if video_transcript:
                 logger.info("Transcript loaded from DB.")
         if not video_transcript:
-            video_transcript, transcription_language = get_video_transcript(video_id)
+            video_transcript, transcription_language = get_video_transcript(
+                video_id, proxy=proxy
+            )
             try:
                 store_transcript(
-                    video_id, youtube_video_url, video_transcript, transcription_language
+                    video_id,
+                    youtube_video_url,
+                    video_transcript,
+                    transcription_language,
                 )
                 logger.info("Transcript stored in DB.")
             except Exception as e:
@@ -251,6 +276,7 @@ def main() -> None:
     logger.debug(f"Transcribe Word Count: {transcribe_word_count:,}")
     final_prompt_word_count = len(final_prompt.split())
     logger.debug(f"Final Prompt Word Count: {final_prompt_word_count:,}")
+
 
 if __name__ == "__main__":
     main()

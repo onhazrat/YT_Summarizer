@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "loguru>=0.7.3",
+    "requests[socks]>=2.32.3",
     "sqlmodel>=0.0.24",
     "youtube-transcript-api>=1.0.3",
 ]
