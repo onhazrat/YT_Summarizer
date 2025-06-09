@@ -84,12 +84,15 @@ def extract_video_id(url: str) -> str:
 
 def convert_seconds_to_timestamp(seconds: float) -> str:
     """
-    Converts a time duration in seconds to a timestamp string (HH:MM:SS).
+    Converts a time duration in seconds to a timestamp string (HH:MM:SS),
+    with each part zero-padded to 2 digits.
     """
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     seconds = int(seconds % 60)
-    return f"{hours}:{minutes}:{seconds}"
+    
+    # Use the :02 format specifier to pad each part with a leading zero if needed
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 
 def get_video_transcript(video_id: str) -> tuple[str, str]:
